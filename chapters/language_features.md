@@ -1,5 +1,3 @@
-{% raw %}
-
 # Modern C++ Language Features
 
 ## Memory and References
@@ -634,5 +632,3 @@ using net::ip::tcp;
 ```
 
 Everything else — `io_context`, `tcp::socket`, `tcp::acceptor` will remain identical.
-
-{% endraw %}

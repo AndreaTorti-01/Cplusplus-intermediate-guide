@@ -2,8 +2,6 @@
 
 **Note:** All the complexities below are for the **average case**.
 
-{% raw %}
-
 ## Sequence Containers
 
 | Container | Implementation | Search (by value) | Insertion | Removal | Indexable? |
@@ -51,5 +49,3 @@
 > [This toy orderbook](https://github.com/AndreaTorti-01/Cplusplus-intermediate-guide/blob/main/orderbook.cpp) uses some of them
 
 > [This toy class](https://github.com/AndreaTorti-01/Cplusplus-intermediate-guide/blob/main/heap.h) implements a basic thread-safe min-heap
-
-{% endraw %}
