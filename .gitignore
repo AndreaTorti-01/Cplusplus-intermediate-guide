@@ -1,0 +1,9 @@
+*
+
+!*.h
+!*.cpp
+!*.md
+!index.html
+!/chapters/
+!.nojekyll
+!/.gitignore
