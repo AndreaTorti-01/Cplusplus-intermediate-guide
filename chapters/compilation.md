@@ -60,7 +60,6 @@ Common examples:
 Use `static` generously — it’s like making things `private` at file level.
 It avoids namespace pollution and linking errors.
 
----
 
 ### `extern`
 
@@ -110,6 +109,11 @@ Use `extern "C"` when:
 * Creating plugins or DLLs with stable ABIs
 * Interfacing with other languages (Python, Rust, etc.)
 
+### Bonus:
+
+* **Static linking**: object code is copied into the executable at build time.
+* **Dynamic linking**: executable loads shared libraries (`.dll`, `.so`) at runtime.
+
 ---
 
 ## Inline, Templates, and Constants in Headers
@@ -144,10 +148,3 @@ Or use:
 ```cpp
 #pragma once
 ```
-
----
-
-## Linking
-
-* **Static linking**: object code is copied into the executable at build time.
-* **Dynamic linking**: executable loads shared libraries (`.dll`, `.so`) at runtime.

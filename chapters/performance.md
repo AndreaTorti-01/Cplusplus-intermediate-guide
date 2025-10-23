@@ -92,8 +92,6 @@ int main() {
 
 **Key insight:** R-values are about to die — we can "steal" their resources safely.
 
----
-
 ### `std::move` vs Casting to R-value Reference
 
 * **`std::move(x)`** is just a cast: `static_cast<T&&>(x)`
@@ -109,8 +107,6 @@ dest = std::move(source) // this would call the move assignment operator instead
 **After `std::move(source)`:**
 * `source` is in a valid but unspecified state
 * Do not use `source` unless you reassign it
-
----
 
 ### Copy Constructor
 
@@ -136,8 +132,6 @@ public:
 String source("Hello");
 String dest = source;  // calls copy constructor
 ```
-
----
 
 ### Move Constructor
 
@@ -169,8 +163,6 @@ String dest = std::move(source);  // calls move constructor
 // source.m_Data is now nullptr
 ```
 
----
-
 ### Copy Assignment Operator
 
 **Pattern:** Copy-and-swap or manual implementation.
@@ -199,8 +191,6 @@ String source("Hello");
 String dest("World");
 dest = source;  // calls copy assignment
 ```
-
----
 
 ### Move Assignment Operator
 
@@ -237,8 +227,6 @@ String dest("World");
 dest = std::move(source);  // calls move assignment
 // source.m_Data is now nullptr
 ```
-
----
 
 ### Complete Example
 
@@ -310,8 +298,6 @@ d = std::move(c);          // move assignment (c is now empty)
 
 > [Example usage of move with a vector](https://github.com/AndreaTorti-01/Cplusplus-intermediate-guide/blob/main/move.cpp)
 
----
-
 ### Rule of Five
 
 If you define any of these, you should probably define all:
@@ -323,6 +309,72 @@ If you define any of these, you should probably define all:
 5. Move assignment operator
 
 Or use `= default` / `= delete` to be explicit about your intent.
+
+---
+
+## Perfect Forwarding
+
+`std::forward` is used to **preserve the value category** (lvalue/rvalue-ness) of a function argument *when forwarding it* from one function to another — usually inside a template.
+
+```cpp
+void process(int& x)        { std::cout << "lvalue\n"; }
+void process(int&& x)       { std::cout << "rvalue\n"; }
+
+template <typename T>
+void wrapper(T t) {
+    process(t);  // always calls lvalue version!
+}
+
+int main() {
+    int a = 5;
+    wrapper(a);      // prints lvalue (OK)
+    wrapper(10);     // prints lvalue (WRONG!)
+}
+```
+
+**Why wrong?**
+Because inside `wrapper`, `t` has a *name* — so it’s always an **lvalue**, even if it was initialized from an rvalue.
+
+### Using `std::forward`
+
+```cpp
+template <typename T>
+void wrapper(T&& t) {
+    process(std::forward<T>(t)); // preserves original "value category"
+}
+```
+
+Now:
+
+```cpp
+int a = 5;
+wrapper(a);   // prints lvalue
+wrapper(10);  // prints rvalue ✅
+```
+
+### Why it matters
+
+It enables functions like `std::make_shared`, `std::vector::emplace_back`, etc., to *construct things in place* efficiently without losing move semantics.
+
+Example:
+
+```cpp
+template<class T, class... Args>
+std::unique_ptr<T> make_unique(Args&&... args) {
+    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
+```
+
+If `args` were passed by value or just `args...`, you’d lose moves — everything would copy.
+
+| Concept              | Description                                                     |
+| -------------------- | --------------------------------------------------------------- |
+| `std::move(x)`       | Always turns `x` into an rvalue (even if it wasn’t).            |
+| `std::forward<T>(x)` | Turns `x` into an rvalue *only if it was originally an rvalue*. |
+
+It's used, for example, in the standard library's vector emplace_back function, in order to allow in-place construction.
+
+---
 
 ## Custom Allocators
 
@@ -336,8 +388,6 @@ Useful for:
 
 
 > Check out the [Andreas Weis 2018 code::dive talk](https://youtu.be/FcpmMmyNNv8)
-
----
 
 ### Types of Custom Allocators
 
@@ -366,8 +416,6 @@ void* allocate(size_t bytes) {
 
 **Use case:** Frame allocations in game engines, temporary string building.
 
----
-
 #### 2. Stack Allocator
 
 **Concept:** Like a linear allocator, but deallocations must happen in **reverse order** (LIFO).
@@ -392,8 +440,6 @@ void deallocate(size_t bytes) {
 
 **Use case:** Nested scope allocations, call stacks, expression evaluation.
 
----
-
 #### 3. Pool Allocator
 
 **Concept:** Pre-allocate fixed-size chunks. Fast allocation/deallocation of same-sized objects.
@@ -416,8 +462,6 @@ Single fixed-size pool
 
 **Use case:** Object pools (particles, enemies, bullets), network packet buffers.
 
----
-
 #### 4. Free List Allocator
 
 **Concept:** Like `malloc` but in a pre-allocated buffer. Maintains a list of free blocks of varying sizes.
@@ -439,8 +483,6 @@ deallocate → merge adjacent free blocks
 * **Worst-fit:** Use largest block
 
 **Use case:** General-purpose allocator, game asset managers, custom `malloc`.
-
----
 
 ### When to Use Custom Allocators
 
@@ -569,8 +611,6 @@ void write_to_map(int key, const std::string& val) {
 }
 ```
 
------
-
 ### `std::atomic`
 
 Provides **lock-free**, indivisible (atomic) operations on single types (like `int`, `bool`, pointers).
@@ -680,7 +720,7 @@ for (float v : particles.vx) {
 
 Now, when the CPU fetches a 64-byte cache line, it gets 16 `vx` values (`64 / sizeof(float)`). Every single byte loaded is used by the loop. This **maximizes memory bandwidth** and is dramatically faster.
 
------
+---
 
 ## Taking Advantage of the CPU Cache
 

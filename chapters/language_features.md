@@ -58,8 +58,6 @@ std::shared_ptr<Widget>  sharedWidget = std::make_shared<Widget>(99);    // shar
 
 **Rule:** Use `delete[]` for arrays, `delete` for single objects. Mismatching causes undefined behavior.
 
----
-
 ### References
 
 A **reference** is an alias to an existing object. Once bound, it **cannot be reseated** — it always refers to the same object.
@@ -260,8 +258,6 @@ void do_work() {
 }
 ```
 
------
-
 ### `std::unique_ptr` (Sole Ownership)
 
 This is the **default, zero-cost** choice. It ensures **only one owner** for a resource. It's move-only, just like the `String` class example.
@@ -292,16 +288,18 @@ void use_unique() {
 } // ptr3 goes out of scope here, 'delete' is automatically called.
 ```
 
------
-
 ### `std::shared_ptr` (Shared Ownership)
 
-Use this **only when ownership must be shared** among multiple objects. It uses **atomic reference counting** to track how many "owners" exist. The resource is deleted when the *last* `shared_ptr` is destroyed.
+Use this **only when ownership must be shared** among multiple objects. It uses **atomic reference counting** to track how many "owners" exist. The resource is deleted (its destructor gets called) when the *last* `shared_ptr` is destroyed.
 
-  * **Overhead:** Has cost. `shared_ptr` is 2x the size of a raw pointer (16 bytes) and copying it requires a small atomic operation.
+  * **Overhead:** Has cost. `shared_ptr` is 2x the size of a raw pointer (16 bytes): it stores the raw pointer to the referenced object, and the pointer to a structure called a *control block*. The control block contains:
+    * either a pointer to the managed object or the managed object itself (sound strange? Well each shared pointer could point at a different part of the same managed object. each one would have a different raw pointer, but the same pointer to the managed object)
+    * the deleter (type-erased because all shared_ptrs to the same object must have the same type regardless of their deleter type, allowing assignment and shared ownership between shared_ptrs created with different deleters)
+    * the allocator (type-erased too)
+    * the number of shared_ptrs that own the managed object
+    * the number of weak_ptrs that refer to the managed object
   * **Best Practice:** Always create using `std::make_shared`. This does **one heap allocation** (for the object *and* its counter) instead of two.
 
-<!-- end list -->
 
 ```cpp
 void use_shared() {
@@ -322,8 +320,6 @@ void use_shared() {
     
 } // s_ptr1 goes out of scope. Ref count is 0. 'delete' is called.
 ```
-
------
 
 ### `std::weak_ptr` (Breaking Cycles)
 
@@ -549,8 +545,6 @@ You can choose between reliability and speed:
 For real-time applications (e.g., trading, chat, games), disable **Nagle’s algorithm** using the `TCP_NODELAY` option.
 This forces TCP to send packets *immediately*, instead of buffering them.
 
----
-
 ### Cross-Platform Blocking TCP Server (C++17+, Boost.Asio)
 
 Here’s a **modern**, **blocking** TCP server written in portable C++.
@@ -607,8 +601,6 @@ int main() {
 }
 ```
 
----
-
 ### Key Advantages of boost/net modern approach over POSIX
 
 | Feature          | POSIX                       | Boost.Asio / `std::net`                   |
@@ -618,8 +610,6 @@ int main() {
 | RAII cleanup     | Manual (`close()`)          | Automatic (RAII)                          |
 | Async support    | Manual threads & `select()` | Built-in async (`async_read`, coroutines) |
 | TCP_NODELAY      | `setsockopt()`              | `socket.set_option(tcp::no_delay(true))`  |
-
----
 
 ### Future-Proof: C++23 / C++26 Networking TS
 
@@ -632,3 +622,97 @@ using net::ip::tcp;
 ```
 
 Everything else — `io_context`, `tcp::socket`, `tcp::acceptor` will remain identical.
+
+---
+
+## Future, Promise, Async
+
+Imagine you launch a background thread to do some heavy work:
+
+```cpp
+std::thread t([] {
+    // do heavy stuff
+    return 42;
+});
+```
+
+But — wait — `std::thread` **can’t return a value**.
+It just runs and exits; you can only `join()` it, not “get a result”.
+
+We need a mechanism that lets one thread *produce* a result and another thread *consume* it.
+
+That’s where **promises**, **futures**, and **async** come in.
+
+Think of `std::promise` as a **write end** of a one-time communication channel, and `std::future` as the **read end**.
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <future>
+
+int main() {
+    std::promise<int> p;              // producer
+    std::future<int> f = p.get_future();  // consumer (associated with that promise)
+
+    std::thread worker([&p]() {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        p.set_value(42);              // fulfill the promise
+    });
+
+    std::cout << "Waiting...\n";
+    int result = f.get();             // blocks until set_value() is called
+    std::cout << "Result = " << result << "\n";
+
+    worker.join();
+}
+```
+
+* `p` and `f` share a hidden state.
+* `set_value()` fills that state.
+* `f.get()` waits until that happens and retrieves the value.
+
+It’s **thread-safe**, **synchronizing**, and one-time only (you can’t set twice or get twice).
+
+### What about `std::async`?
+
+1. Creates a promise/future pair,
+2. Launches a new thread (by default),
+3. Fulfills the promise when the thread finishes.
+
+So instead of manually wiring `promise` and `future`, you just do:
+
+```cpp
+#include <iostream>
+#include <future>
+
+int heavy_task(int a, int b) {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    return a + b;
+}
+
+int main() {
+    std::future<int> f = std::async(std::launch::async, heavy_task, 10, 32);
+    // async automatically runs heavy_task(10,32) in another thread
+
+    std::cout << "Doing other stuff...\n";
+    std::cout << "Result = " << f.get() << "\n";  // waits for result
+}
+```
+
+`std::async` takes a **policy**:
+
+* `std::launch::async` → always runs in a new thread.
+* `std::launch::deferred` → runs **lazily** when you call `get()` or `wait()`.
+* (default: may choose either depending on implementation)
+
+Example:
+
+```cpp
+auto f = std::async(std::launch::deferred, [] {
+    std::cout << "Running now!\n";
+    return 123;
+});
+
+std::this_thread::sleep_for(std::chrono::seconds(2));
+f.get(); // only here the lambda runs
+```

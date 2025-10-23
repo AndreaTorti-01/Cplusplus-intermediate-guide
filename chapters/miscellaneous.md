@@ -68,7 +68,9 @@ public:
 };
 ```
 
-**Rule of thumb**: If a class has any virtual functions, it should also have a virtual destructor.
+**Rule of thumb**:
+* **Virtual** functions (and destructors) → **resolved by *dynamic type*** at **runtime** (via vtable).
+* **Non-virtual** functions (and destructors) → **resolved by *static type*** at **compile time**.
 
 ---
 
