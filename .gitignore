@@ -3,7 +3,8 @@
 !*.h
 !*.cpp
 !*.md
+!*.svg
 !index.html
-!/chapters/
 !.nojekyll
+!/chapters/
 !/.gitignore
