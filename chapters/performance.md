@@ -547,118 +547,145 @@ Notes:
 
 ---
 
-## Mutexes vs. Atomics
+## Thread Pool with UDP Socket: an Example
 
-### `std::mutex` (Mutual Exclusion)
-
-A mutex protects a **critical section** (a block of code) so that only one thread can execute it at a time.
-
-  * **How it works:** Threads "lock" the mutex. If another thread tries to lock it, that thread **blocks** (sleeps) and yields its time to the OS.
-  * **Cost:** The blocking/waking is a context switch managed by the OS, which can be "heavy" (slow).
-  * **Best Practice:** Use `std::lock_guard` or `std::scoped_lock`. They use **RAII** to automatically unlock the mutex when the scope ends, even if an exception is thrown.
-
-<!-- end list -->
+A practical example of managing concurrent work efficiently:
 
 ```cpp
-#include <mutex>
+#include <thread>
 #include <vector>
-#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
 
-std::vector<int> g_myVector;
-std::mutex g_myMutex; // Protects g_myVector
-
-void thread_func() {
-    // lock_guard automatically locks g_myMutex
-    std::lock_guard<std::mutex> lock(g_myMutex);
+class ThreadPool {
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
     
-    // --- CRITICAL SECTION ---
-    // This block is now thread-safe.
-    g_myVector.push_back(1);
-    // --- END CRITICAL SECTION ---
+    std::mutex queue_mtx;
+    std::condition_variable cv;
+    bool stop = false;
+    
+public:
+    ThreadPool(size_t num_threads) {
+        for (size_t i = 0; i < num_threads; ++i) {
+            workers.emplace_back([this] {
+                while (true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock lock(queue_mtx);
+                        cv.wait(lock, [this]{ return stop || !tasks.empty(); });
+                        
+                        if (stop && tasks.empty()) return;
+                        
+                        task = std::move(tasks.front());
+                        tasks.pop();
+                    }
+                    task();  // Execute outside the lock
+                }
+            });
+        }
+    }
+    
+    void enqueue(std::function<void()> task) {
+        {
+            std::lock_guard lock(queue_mtx);
+            tasks.push(std::move(task));
+        }
+        cv.notify_one();  // Wake one worker
+    }
+    
+    ~ThreadPool() {
+        {
+            std::lock_guard lock(queue_mtx);
+            stop = true;
+        }
+        cv.notify_all();
+        for (auto& worker : workers) {
+            worker.join();
+        }
+    }
+};
 
-} // g_myMutex is automatically unlocked here
-```
+// Usage with UDP socket
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <cstring>
 
-### Other Mutex Types
-
-  * **`std::recursive_mutex`:** Allows the *same thread* to lock the mutex multiple times. Useful for complex recursive functions. Slower than a normal mutex.
-  * **`std::shared_mutex` (C++17):** A **reader-writer** lock.
-      * Allows **many threads** to read at the same time (`std::shared_lock`).
-      * Allows only **one thread** to write at a time (`std::unique_lock`).
-      * Faster than a regular mutex if you have many more reads than writes.
-
-<!-- end list -->
-
-```cpp
-#include <shared_mutex>
-#include <map>
-
-std::map<int, std::string> g_myMap;
-std::shared_mutex g_myMapMutex;
-
-std::string read_from_map(int key) {
-    // Many threads can enter this function at once
-    std::shared_lock<std::shared_mutex> lock(g_myMapMutex);
-    auto it = g_myMap.find(key);
-    if (it == g_myMap.end()) return "";
-    return it->second;
+void handlePacket(const char* data, size_t len, sockaddr_in client) {
+    // Process the UDP packet (runs in worker thread)
+    // Parse, validate, respond, etc.
 }
 
-void write_to_map(int key, const std::string& val) {
-    // Only one thread can enter this function at a time
-    std::unique_lock<std::shared_mutex> lock(g_myMapMutex);
-    g_myMap[key] = val;
-}
-```
-
-### `std::atomic`
-
-Provides **lock-free**, indivisible (atomic) operations on single types (like `int`, `bool`, pointers).
-
-  * **How it works:** Uses special CPU instructions (e.g., `lock add`) that cannot be interrupted. Other threads do *not* block or sleep.
-  * **Why faster?** No OS context switch. No thread blocking. This is *much* faster than a mutex if many threads are fighting for the same variable (high contention).
-  * **Why limited?** It only protects a *single* operation on a *single* variable. It **cannot** protect a *block* of code (e.g., finding in a map *and then* inserting).
-
-<!-- end list -->
-
-```cpp
-#include <atomic>
-#include <thread>
-
-std::atomic<int> g_counter(0); // This integer is now thread-safe
-
-void increment_counter() {
-    for (int i = 0; i < 10000; ++i) {
-        g_counter++; // This is an atomic operation.
-                     // It's like g_counter.fetch_add(1);
+int main() {
+    ThreadPool pool(4);  // 4 worker threads
+    
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in server_addr{};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(8080);
+    
+    bind(sockfd, (sockaddr*)&server_addr, sizeof(server_addr));
+    
+    char buffer[1024];
+    sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    
+    while (true) {
+        ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0,
+                            (sockaddr*)&client_addr, &client_len);
+        
+        if (n > 0) {
+            // Copy data and dispatch to thread pool
+            std::string packet(buffer, n);
+            sockaddr_in client = client_addr;
+            
+            pool.enqueue([packet, client]() {
+                handlePacket(packet.data(), packet.size(), client);
+            });
+        }
     }
 }
 ```
 
-### Atomic Compare-and-Swap (CAS)
+**Why this works:** The main thread only receives packets and queues work. Worker threads handle the actual processing, preventing slow handlers from blocking new packets. The condition variable keeps idle workers asleep until work arrives, minimizing overhead.
 
-This is the heart of most lock-free programming. It atomically does this:
-"Check if `variable` still has `expected_value`. If yes, set it to `new_value`. Tell me if I succeeded."
+---
+
+## False Sharing
+
+Problem: When multiple threads access different variables that happen to reside on the same cache line (typically 64 bytes), writes by one thread invalidate the cache line for all other threads, causing excessive cache coherency traffic.
 
 ```cpp
-std::atomic<int> g_value(10);
-
-void update_value() {
-    int expected = 10;
-    int desired = 20;
-
-    // Try to change g_value from 10 to 20
-    // This is one, indivisible hardware operation
-    bool succeeded = g_value.compare_exchange_strong(expected, desired);
-    
-    if (succeeded) {
-        // We successfully changed 10 to 20
-    } else {
-        // We failed. Some other thread changed g_value first.
-        // `expected` is now updated to the *current* value.
-    }
-}
+// Bad - false sharing
+struct Counters {
+    std::atomic<int> counter1;  // Likely on same cache line
+    std::atomic<int> counter2;
+};
 ```
+
+```cpp
+// Good - padded to separate cache lines
+struct alignas(64) Counters {
+    std::atomic<int> counter1;
+    char padding[64 - sizeof(std::atomic<int>)]{};
+    std::atomic<int> counter2;
+};
+```
+
+```cpp
+// Or use C++17 hardware_destructive_interference_size
+// These constant(s) provide a portable way to access the L1 data cache line size.
+// (requires <new>)
+struct Counters {
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> counter1;
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> counter2;
+};
+```
+
 ---
 
 ## Memory Coalescence and Data Layout

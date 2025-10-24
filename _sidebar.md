@@ -1,6 +1,7 @@
 * [Home](/README.md)
 * [Compiler, Linker and header files basics](/chapters/compilation.md)
 * [Modern C++ Language Features](/chapters/language_features.md)
+* [Object-Oriented Programming](/chapters/object_oriented.md)
 * [STL Containers Cheatsheet](/chapters/containers.md)
 * [Performance Tips and Techniques](/chapters/performance.md)
 * [Miscellaneous](/chapters/miscellaneous.md)

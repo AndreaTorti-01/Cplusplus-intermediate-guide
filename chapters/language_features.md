@@ -58,6 +58,20 @@ std::shared_ptr<Widget>  sharedWidget = std::make_shared<Widget>(99);    // shar
 
 **Rule:** Use `delete[]` for arrays, `delete` for single objects. Mismatching causes undefined behavior.
 
+#### Prefer brace initialization ({}) to avoid narrowing
+
+Brace initialization performs list-initialization, which rejects narrowing conversions at compile time. Using `=` with `{}` (e.g., `int x = {42};`) is redundant—both forms are list-initialization. Prefer `T x{...};` for clarity and safety.
+
+```cpp
+int a = 3.14;    // OK: narrows to 3 (may only warn)
+int b{3.14};     // error: narrowing conversion from double to int
+int c = {3.14};  // error: same as above (list-initialization via =)
+
+double d{3};     // OK: no narrowing
+std::vector<int> v{1, 2, 3.0};   // error: 3.0 is double (narrowing)
+std::vector<int> v2 = {1, 2, 3}; // OK: '=' is redundant here
+```
+
 ### References
 
 A **reference** is an alias to an existing object. Once bound, it **cannot be reseated** — it always refers to the same object.
@@ -716,3 +730,478 @@ auto f = std::async(std::launch::deferred, [] {
 std::this_thread::sleep_for(std::chrono::seconds(2));
 f.get(); // only here the lambda runs
 ```
+
+---
+
+## Variadic Templates...
+
+They're useful when we expect a variable number of inputs to a function.
+
+We use a template parameter pack, and inside the actual function we have a function parameter pack.
+
+For example...
+
+```cpp
+// ---- Recursive pattern (C++11/14) ----
+
+// base case
+template <typename T>
+T Adder(T v) {
+    return v;
+}
+
+// recursive case
+template <typename T, typename... Args>
+auto Adder(T first, Args... args) {
+    return first + Adder(args...);
+}
+```
+
+> For mixed types, prefer a common accumulator type to avoid narrowing:
+```cpp
+#include <type_traits>
+
+template <typename... Ts>
+auto sum_recursive(Ts... xs) {
+    using R = std::common_type_t<Ts...>;
+    // base case + recursion usually require overloads; prefer folds below instead
+    return (R{} + ... + static_cast<R>(xs)); // C++17 fold; identity R{} handles 0 args
+}
+```
+
+### Fold Expressions (C++17+)
+
+Folds are the modern way to “reduce” a parameter pack without recursion.
+
+```cpp
+// Sum all arguments (works for ints, doubles, etc.)
+template <typename... Ts>
+auto sum(Ts... xs) {
+    using R = std::common_type_t<Ts...>;
+    return (R{} + ... + static_cast<R>(xs)); // identity avoids empty-pack issues
+}
+
+// Multiply all arguments (1 is the multiplicative identity)
+template <typename... Ts>
+auto product(Ts... xs) {
+    using R = std::common_type_t<Ts...>;
+    return (R{1} * ... * static_cast<R>(xs));
+}
+
+// Print all arguments, space-separated
+template <typename... Ts>
+void print_all(Ts&&... xs) {
+    // left fold over operator<< with a separator
+    ((std::cout << xs << ' '), ...);
+    std::cout << '\n';
+}
+```
+
+Notes:
+- Left vs right fold: (a op ... op z) vs (a op (... op z)). For associative ops (+, *) it’s fine; for non-associative, pick consistently.
+- Provide an identity (e.g., 0 for +, 1 for *) if you want to support zero arguments.
+
+### Perfect Forwarding with Packs
+
+Use forwarding references to avoid copies and support move-only types.
+
+```cpp
+#include <utility>
+#include <vector>
+
+// forward arguments into a container (construct in-place)
+template <typename T, typename... Args>
+T& append_emplaced(std::vector<T>& v, Args&&... args) {
+    return v.emplace_back(std::forward<Args>(args)...);
+}
+
+// apply a callable to each arg
+template <typename F, typename... Args>
+void for_each_arg(F&& f, Args&&... args) {
+    (f(std::forward<Args>(args)), ...); // guaranteed left-to-right since C++17
+}
+```
+
+### Edge Cases and Tips
+
+- Zero arguments:
+  - Recursive functions need a base case.
+  - Folds can use an identity: ``(R{} + ... + xs)`` returns ``R{}`` when no args are passed.
+- Evaluation order:
+  - Since C++17, folds evaluate left-to-right. Pre‑C++17 you’d use an initializer-list trick: ``int unused[] = { (f(xs), 0)... };``
+- Type promotion:
+  - Prefer ``std::common_type_t`` to avoid narrowing and to get a stable accumulator type for mixed args.
+- Move-only types:
+  - Use forwarding references (``T&&`` with template type deduction) and ``std::forward`` to pass through rvalues.
+- Constraining templates:
+  - C++17 (SFINAE): ``template <typename... Ts, std::enable_if_t<(std::conjunction_v<std::is_arithmetic<Ts>...>), int> = 0>``  
+  - C++20 (requires): ``template <typename... Ts> requires (std::is_arithmetic_v<Ts> && ...) …``
+
+> check out [this](https://github.com/AndreaTorti-01/Cplusplus-intermediate-guide/blob/main/variadic_templates.cpp) code for a more comprehensive example
+
+---
+
+## The Curious Case of `std::vector<bool>`
+
+`std::vector<bool>` is a **template specialization** that behaves differently from all other `std::vector` types. Instead of storing individual `bool` values, it **packs bits** to save memory — but this comes with serious tradeoffs.
+
+```cpp
+#include <vector>
+
+int main()
+{
+    std::vector<bool> vec = {true, false, true, false};
+    // should occupy 4 bytes, occupies half a byte instead (1 byte in memory)...
+    bool bool_copy = vec[0]; // copy, ok
+    bool& bool_ref = vec[0]; // error!
+    std::vector<bool>::reference bool_ref_crazy = vec[0]; // correct!
+    auto bool_ref_clean = vec[0]; // how it's done in reality
+}
+```
+
+---
+
+## Basics of Concurrency in C++
+
+Modern C++ provides powerful synchronization primitives for thread-safe code. Here are the most important facilities you'll use regularly.
+
+### `std::mutex` - The Foundation
+
+The fundamental mutual exclusion primitive. Protects shared data from concurrent access:
+
+```cpp
+#include <mutex>
+#include <thread>
+
+std::mutex mtx;
+int shared_counter = 0;
+
+// BAD: Manual lock/unlock is dangerous
+void dangerousIncrement() {
+    mtx.lock();
+    ++shared_counter;
+    // Exception here = DEADLOCK! Mutex never unlocks
+    mtx.unlock();
+}
+
+// GOOD: RAII wrapper handles unlock automatically
+void safeIncrement() {
+    std::lock_guard<std::mutex> lock(mtx);
+    ++shared_counter;
+    // Unlocks even if exception is thrown
+}
+```
+
+**Never call `lock()` and `unlock()` manually.** Always use RAII wrappers for exception safety.
+
+### `std::lock_guard` and `std::unique_lock` (C++11)
+
+Two RAII wrappers with different trade-offs:
+
+```cpp
+#include <mutex>
+
+std::mutex mtx;
+int data = 0;
+
+// lock_guard: Simple, fast, inflexible
+void simpleLocking() {
+    std::lock_guard<std::mutex> lock(mtx);
+    ++data;
+    // That's it - locks on construction, unlocks on destruction
+}
+
+// unique_lock: Flexible, required for condition variables
+void flexibleLocking() {
+    std::unique_lock<std::mutex> lock(mtx, std::defer_lock);
+    
+    // Do work without lock
+    
+    lock.lock();      // Lock when needed
+    ++data;
+    lock.unlock();    // Unlock early to reduce contention
+    
+    // Do more work without lock
+    
+    lock.lock();      // Can lock again
+    data *= 2;
+    // Auto-unlocks on destruction
+}
+```
+
+Use `lock_guard` by default. Switch to `unique_lock` only when you need flexibility or condition variables.
+
+### `std::scoped_lock` (C++17) - Deadlock Prevention
+
+The modern way to lock multiple mutexes atomically:
+
+```cpp
+#include <mutex>
+
+std::mutex mtx1, mtx2;
+int account1 = 1000, account2 = 500;
+
+// BAD: Classic deadlock scenario
+void deadlockProne() {
+    std::lock_guard<std::mutex> lock1(mtx1);  // Thread A gets mtx1
+    std::lock_guard<std::mutex> lock2(mtx2);  // Thread B gets mtx2
+    // If another thread locks in opposite order = DEADLOCK
+}
+
+// GOOD: Atomic multi-lock prevents deadlock
+void transfer(int amount) {
+    std::scoped_lock lock(mtx1, mtx2);  // Locks both atomically
+    account1 -= amount;
+    account2 += amount;
+}
+
+// Works with single mutex too (replaces lock_guard in C++17+)
+void singleLock() {
+    std::scoped_lock lock(mtx1);
+    ++account1;
+}
+```
+
+**Always use `scoped_lock` for multiple mutexes.** It uses a deadlock-avoidance algorithm under the hood. In C++17+, prefer it over `lock_guard` for consistency.
+
+### `std::shared_mutex` (C++17) - Reader-Writer Locks
+
+Allows multiple readers OR one writer. Perfect for read-heavy workloads:
+
+```cpp
+#include <shared_mutex>
+#include <map>
+
+std::shared_mutex cache_mtx;
+std::map<int, std::string> cache;
+
+// Many readers can run simultaneously
+std::string readCache(int key) {
+    std::shared_lock lock(cache_mtx);  // Shared access
+    return cache[key];
+    // Multiple threads can hold shared_lock concurrently
+}
+
+// Writer gets exclusive access
+void writeCache(int key, std::string value) {
+    std::unique_lock lock(cache_mtx);  // Exclusive access
+    cache[key] = value;
+    // No other thread (reader or writer) can access
+}
+
+// BAD: Regular mutex serializes all readers
+std::mutex bad_mtx;
+std::string inefficientRead(int key) {
+    std::lock_guard lock(bad_mtx);
+    return cache[key];  // Only ONE reader at a time!
+}
+```
+
+Think of `shared_mutex` as: **many readers can share, writers need exclusivity.** Use regular `mutex` for write-heavy or balanced workloads since it's faster.
+
+### `std::condition_variable` (C++11) - Thread Synchronization
+
+Allows threads to wait for specific conditions without busy-waiting:
+
+```cpp
+#include <condition_variable>
+#include <mutex>
+#include <queue>
+
+std::mutex mtx;
+std::condition_variable cv;
+std::queue<int> tasks;
+bool shutdown = false;
+
+void producer() {
+    for (int i = 0; i < 100; ++i) {
+        {
+            std::unique_lock lock(mtx);
+            tasks.push(i);
+        }  // Unlock before notify for better performance
+        cv.notify_one();
+    }
+    
+    std::unique_lock lock(mtx);
+    shutdown = true;
+    cv.notify_all();
+}
+
+void consumer() {
+    while (true) {
+        std::unique_lock lock(mtx);
+        
+        // Predicate prevents spurious wakeups
+        cv.wait(lock, []{ return !tasks.empty() || shutdown; });
+        
+        if (tasks.empty()) break;  // Shutdown and no work
+        
+        int task = tasks.front();
+        tasks.pop();
+        lock.unlock();  // Process outside critical section
+        
+        // Process task...
+    }
+}
+```
+
+**Key points:** Condition variables require `unique_lock` (not `lock_guard`). Always use the predicate form of `wait()` to handle spurious wakeups correctly.
+
+### `std::counting_semaphore` and `std::binary_semaphore` (C++20)
+
+Control access to limited resources. Lighter weight than mutexes for simple counting:
+
+```cpp
+#include <semaphore>
+#include <thread>
+
+// Limit to 5 concurrent database connections
+std::counting_semaphore<5> db_pool(5);
+
+void queryDatabase() {
+    db_pool.acquire();  // Wait if all 5 slots taken
+    // Execute database query
+    db_pool.release();  // Free up a slot
+}
+
+// Binary semaphore: signal between threads
+std::binary_semaphore signal(0);  // Starts at 0
+
+void waiter() {
+    signal.acquire();  // Blocks until released
+    // Proceed after signal
+}
+
+void notifier() {
+    // Do some work
+    signal.release();  // Wake up waiter
+}
+
+// Try without blocking
+void tryQuery() {
+    if (db_pool.try_acquire()) {
+        // Got a connection immediately
+        db_pool.release();
+    } else {
+        // All busy, try later
+    }
+}
+```
+
+Semaphores don't have ownership semantics like mutexes. Use them for resource pools, producer-consumer patterns, or simple signaling between threads.
+
+### `std::latch` and `std::barrier` (C++20)
+
+Synchronization points for coordinating multiple threads:
+
+```cpp
+#include <latch>
+#include <barrier>
+#include <thread>
+#include <vector>
+
+// LATCH: One-time countdown (cannot be reused)
+void parallelProcessing() {
+    std::vector<int> data(1000);
+    std::latch workers_done(4);  // Wait for 4 threads
+    
+    auto worker = [&](int start, int end) {
+        for (int i = start; i < end; ++i) {
+            data[i] = i * i;
+        }
+        workers_done.count_down();  // Signal completion
+    };
+    
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back(worker, i * 250, (i + 1) * 250);
+    }
+    
+    workers_done.wait();  // Block until all 4 finish
+    // Now safe to use data
+    
+    for (auto& t : threads) t.join();
+}
+
+// BARRIER: Reusable synchronization point
+void multiPhaseAlgorithm() {
+    std::vector<double> results(100);
+    std::barrier phase_sync(4);  // 4 threads sync at each phase
+    
+    auto worker = [&](int id) {
+        // Phase 1: Initialize
+        for (int i = 0; i < 25; ++i) { /* work */ }
+        phase_sync.arrive_and_wait();  // All threads sync here
+        
+        // Phase 2: Process (can use results from phase 1)
+        for (int i = 0; i < 25; ++i) { /* work */ }
+        phase_sync.arrive_and_wait();  // Barrier resets automatically
+        
+        // Phase 3: Finalize
+        for (int i = 0; i < 25; ++i) { /* work */ }
+    };
+    
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back(worker, i);
+    }
+    for (auto& t : threads) t.join();
+}
+```
+
+**Choose wisely:** Use `latch` for simple "wait until N tasks complete" patterns. Use `barrier` when threads need to synchronize at multiple points in a loop or multi-phase algorithm.
+
+### `std::call_once` and `std::once_flag` (C++11)
+
+Thread-safe one-time initialization:
+
+```cpp
+#include <mutex>
+#include <memory>
+
+class ExpensiveResource {
+private:
+    static std::unique_ptr<ExpensiveResource> instance;
+    static std::once_flag init_flag;
+    
+    ExpensiveResource() { /* expensive setup */ }
+    
+public:
+    static ExpensiveResource& get() {
+        std::call_once(init_flag, []() {
+            instance = std::make_unique<ExpensiveResource>();
+        });
+        return *instance;
+    }
+};
+
+std::unique_ptr<ExpensiveResource> ExpensiveResource::instance;
+std::once_flag ExpensiveResource::init_flag;
+
+// Can also use for configuration loading
+std::once_flag config_loaded;
+void loadConfig() {
+    std::call_once(config_loaded, []() {
+        // Load configuration files
+        // This runs exactly once, no matter how many threads call it
+    });
+}
+```
+
+Much simpler and more reliable than hand-rolled double-checked locking. The initialization function runs exactly once across all threads, guaranteed.
+
+### Quick Reference
+
+**Choose the right tool:**
+
+* **Basic protection** → `std::lock_guard` or `std::scoped_lock`
+* **Early unlock needed** → `std::unique_lock`
+* **Multiple mutexes** → `std::scoped_lock` (C++17)
+* **Read-heavy data** → `std::shared_mutex` (C++17)
+* **Thread notification** → `std::condition_variable`
+* **Resource limiting** → `std::counting_semaphore` (C++20)
+* **Wait for tasks** → `std::latch` (C++20)
+* **Multi-phase sync** → `std::barrier` (C++20)
+* **One-time init** → `std::call_once`
+
+**Core principles:** Always use RAII. Minimize time holding locks. Prefer standard library primitives over custom solutions. Use C++17/20 features when available for cleaner, safer code. AVOID locking and unlocking in tight loops.
