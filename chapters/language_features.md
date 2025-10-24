@@ -1205,3 +1205,67 @@ Much simpler and more reliable than hand-rolled double-checked locking. The init
 * **One-time init** → `std::call_once`
 
 **Core principles:** Always use RAII. Minimize time holding locks. Prefer standard library primitives over custom solutions. Use C++17/20 features when available for cleaner, safer code. AVOID locking and unlocking in tight loops.
+
+## Basic Terminal I/O + String manipulation
+
+- operator>> reads space-separated tokens
+- std::getline reads a whole line
+- Convert strings: std::stoi (integer), std::stod (double)
+- Format numbers: std::fixed << std::setprecision(n)
+
+```cpp
+#include <iostream>
+#include <iomanip>
+#include <string>
+
+int main() {
+    int n; std::string word;
+    std::cin >> n >> word;                 // tokens: 42 hello
+
+    std::string line;
+    std::getline(std::cin >> std::ws, line); // whole line after >>
+
+    int x = std::stoi("123");              // string -> int
+    double pi = 3.14159;
+
+    std::cout << n << ' ' << word << " | " << line << '\n';
+    std::cout << std::fixed << std::setprecision(2) << pi << '\n'; // 3.14
+}
+```
+
+## File I/O
+
+- ifstream/ofstream close automatically (RAII)
+- Read lines with std::getline
+- Append with std::ios::app
+
+```cpp
+#include <fstream>
+#include <string>
+#include <iostream>
+
+int main() {
+    // Write (overwrite)
+    std::ofstream out("out.txt");
+    out << "hello\n";
+
+    // Read line-by-line
+    std::ifstream in("out.txt");
+    std::string line;
+    while (std::getline(in, line)) {
+        std::cout << line << '\n';
+    }
+
+    // Append
+    // If not specified, ofstream overwrites the file
+    std::ofstream app("out.txt", std::ios::app);
+    app << "more\n";
+
+    // Binary mode
+    std::ofstream bin_out("data.bin", std::ios::binary);
+    int num = 42;
+    // write expects a char* and size in bytes
+    bin_out.write(reinterpret_cast<const char*>(&num), sizeof(num));
+    bin_out.close(); // if we wish to close we can do it explicitly
+}
+```

@@ -1,4 +1,4 @@
-* [Home](/README.md)
+* [Home](/chapters/home.md)
 * [Compiler, Linker and header files basics](/chapters/compilation.md)
 * [Modern C++ Language Features](/chapters/language_features.md)
 * [Object-Oriented Programming](/chapters/object_oriented.md)
