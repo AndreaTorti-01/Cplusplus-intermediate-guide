@@ -125,6 +125,123 @@ void print(const int& val) {
 
 ---
 
+## Templates
+
+Templates let the compiler generate code at compile time based on parameters (types or values). They enable zero‑overhead generic programming.
+
+### Function templates
+
+```cpp
+template <typename T>
+T max_of(T a, T b) {
+    return (a < b) ? b : a;
+}
+
+auto a = max_of(3, 5);        // T = int
+auto b = max_of(2.5, 7.1);    // T = double
+```
+
+- Overload resolution + template argument deduction pick the best match.
+- Mixing types requires either overloads or a common type.
+
+```cpp
+template <typename A, typename B>
+auto add(A a, B b) {
+    using R = std::common_type_t<A, B>; 
+    // R is the common type between A and B, if it exists.
+    return static_cast<R>(a) + static_cast<R>(b);
+}
+```
+
+### Class/struct templates
+
+```cpp
+template <typename T>
+class Box {
+    T value;
+public:
+    explicit Box(T v) : value(std::move(v)) {}
+    const T& get() const { return value; }
+};
+Box<int> bi{42};
+```
+
+### Non-type template parameters (NTTP)
+
+Compile-time values as parameters (sizes, policies, etc.).
+
+```cpp
+template <std::size_t N>
+struct FixedBuffer { std::array<char, N> buf{}; };
+
+template <auto N>                       // C++17: deduced NTTP
+constexpr auto pow2 = (1ull << N);
+
+FixedBuffer<256> fb;
+static_assert(pow2<4> == 16);
+```
+
+### Specialization
+
+- Full specialization: exact type.
+- Partial specialization: a subset of types (class templates only).
+
+```cpp
+// primary template
+template <typename T>
+struct Traits { static constexpr bool is_int = false; };
+
+// full specialization
+template <>
+struct Traits<int> { static constexpr bool is_int = true; };
+
+// partial specialization
+template <typename T>
+struct PtrTraits;
+
+template <typename T>
+struct PtrTraits<T*> { static constexpr bool is_ptr = true; };
+```
+
+### Constraining templates
+
+Prefer concepts (C++20). Pre‑C++20 use SFINAE.
+
+```cpp
+#include <type_traits>
+
+// C++20
+template <typename T>
+requires std::is_arithmetic_v<T>
+T avg(T a, T b) { return (a + b) / 2; }
+
+// C++17 (SFINAE)
+template <typename T,
+          typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+T avg2(T a, T b) { return (a + b) / 2; }
+```
+
+### Class Template Argument Deduction (CTAD) – C++17
+
+Constructors and/or deduction guides let you omit template args.
+
+```cpp
+template <typename T>
+struct Pair {
+    T first, second;
+};
+
+Pair p{1, 2};           // deduces Pair<int>
+Pair q{std::string{"a"}, std::string{"b"}}; // Pair<std::string>
+```
+
+Tips:
+- Keep interfaces minimal; let deduction do the work.
+- Prefer constraints to get clear compile errors.
+- Avoid over-templating; push complexity to implementation details.
+
+---
+
 ## Lambda Expressions
 
 Lambdas are anonymous functions defined inline. They're useful for short callbacks, algorithms, and local operations.
@@ -187,6 +304,75 @@ public:
     }
 };
 ```
+
+### What the compiler generates (closure/functor type)
+
+A lambda compiles into an unnamed struct (a closure type):
+- Captured variables become data members (by value = copies, by reference = references).
+- It defines operator() so the object is callable like a function.
+- If nothing is captured, the closure is stateless and can convert to a function pointer.
+
+Lowered form (conceptually):
+
+```cpp
+int x = 10; int y = 20;
+
+auto lam = [x, &y](int n) { y += n; return x + y; };
+
+// roughly becomes:
+struct __Closure {
+    int  x;   // copy
+    int& y;   // reference
+    int operator()(int n) const { y += n; return x + y; }
+};
+
+__Closure lam2{x, y};
+```
+
+Properties:
+- operator() is const by default. Use mutable to allow modifying captured-by-value copies.
+
+```cpp
+int x = 1;
+auto m = [x]() mutable { ++x; return x; }; // modifies the captured copy
+```
+
+- Captureless lambdas are convertible to function pointers:
+
+```cpp
+auto add = [](int a, int b) { return a + b; };
+int (*fp)(int, int) = add;   // OK: no captures
+```
+
+- Init-capture supports moves and renaming (C++14+):
+
+```cpp
+auto p = std::make_unique<int>(42);
+auto own = [q = std::move(p)] { return *q; }; // owns the pointer
+```
+
+- C++20: [=, *this] captures the current object by value (makes a copy of the object’s state).
+
+### Generic lambdas (C++14+)
+
+Parameters with auto make the lambda’s operator() a template. Each call instantiates a specialization at compile time.
+
+```cpp
+auto id = [](auto x) { return x; };
+
+// roughly:
+struct __Id {
+    template <typename T>
+    T operator()(T x) const { return x; }
+};
+
+auto a = id(123);          // T = int
+auto b = id(std::string("s")); // T = std::string
+```
+
+Notes:
+- Deduces independently per call (like function templates).
+- Can mix auto and concrete types: [](auto* p, std::size_t n) { /* ... */ }
 
 ---
 
