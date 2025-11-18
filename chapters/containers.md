@@ -6,24 +6,24 @@
 
 ### Sequence Containers
 
-| Container | Implementation | Search (by value) | Insertion | Removal | Indexable? |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`std::vector`** | Dynamic Array | $${\color{red}O(n)}$$| **End:**$${\color{green}O(1) \text{ amort.}}$$<br>**Middle:** $${\color{red}O(n)}$$| **End:**$${\color{green}O(1)}$$<br>**Middle:** $${\color{red}O(n)}$$ | ✅ |
-| **`std::deque`** | List of Arrays | $${\color{red}O(n)}$$| **Front/Back:**$${\color{green}O(1) \text{ amort.}}$$<br>**Middle:** $${\color{red}O(n)}$$| **Front/Back:**$${\color{green}O(1)}$$<br>**Middle:** $${\color{red}O(n)}$$ | ✅ |
-| **`std::list`** | Doubly-Linked List | $${\color{red}O(n)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ |
-| **`std::forward_list`** | Singly-Linked List | $${\color{red}O(n)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ |
-| **`std::array`** | Static Array | $${\color{red}O(n)}$$ | N/A (fixed size) | N/A (fixed size) | ✅ |
+| Container | Implementation | Search (by value) | Insertion | Removal | Indexable? | Iterator Stability |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`std::vector`** | Dynamic Array | $${\color{red}O(n)}$$| **End:**$${\color{green}O(1) \text{ amort.}}$$<br>**Middle:** $${\color{red}O(n)}$$| **End:**$${\color{green}O(1)}$$<br>**Middle:** $${\color{red}O(n)}$$ | ✅ | ❌ |
+| **`std::deque`** | List of Arrays | $${\color{red}O(n)}$$| **Front/Back:**$${\color{green}O(1) \text{ amort.}}$$<br>**Middle:** $${\color{red}O(n)}$$| **Front/Back:**$${\color{green}O(1)}$$<br>**Middle:** $${\color{red}O(n)}$$ | ✅ | ❌ |
+| **`std::list`** | Doubly-Linked List | $${\color{red}O(n)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ | ✅ |
+| **`std::forward_list`** | Singly-Linked List | $${\color{red}O(n)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ | ✅ |
+| **`std::array`** | Static Array | $${\color{red}O(n)}$$ | N/A (fixed size) | N/A (fixed size) | ✅ | ✅ |
 
 ---
 
 ### Associative Containers (Ordered)
 
-| Container | Implementation | Search (by key) | Insertion | Removal | Indexable? |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`std::set`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ |
-| **`std::map`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ✅ |
-| **`std::multiset`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ |
-| **`std::multimap`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ |
+| Container | Implementation | Search (by key) | Insertion | Removal | Indexable? | Iterator Stability |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`std::set`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ | ✅ |
+| **`std::map`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ✅ | ✅ |
+| **`std::multiset`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ | ✅ |
+| **`std::multimap`** | Balanced BST¹ | $${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$|$${\color{orange}O(\log n)}$$ | ❌ | ✅ |
 
 ¹ *Typically a Red-Black Tree.*
 
@@ -31,12 +31,12 @@
 
 ### Unordered Associative Containers (Hashed)
 
-| Container | Implementation | Search (by key) | Insertion | Removal | Indexable? |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`std::unordered_set`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ |
-| **`std::unordered_map`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ✅ |
-| **`std::unordered_multiset`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ |
-| **`std::unordered_multimap`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ |
+| Container | Implementation | Search (by key) | Insertion | Removal | Indexable? | Iterator Stability |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`std::unordered_set`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ | ❌ |
+| **`std::unordered_map`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ✅ | ❌ |
+| **`std::unordered_multiset`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ | ❌ |
+| **`std::unordered_multimap`** | Hash Table | $${\color{green}O(1)}$$|$${\color{green}O(1)}$$|$${\color{green}O(1)}$$ | ❌ | ❌ |
 
 ---
 

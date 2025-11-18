@@ -729,6 +729,49 @@ if (it != v.end())
 
 > [Iterators Usage Example](https://github.com/AndreaTorti-01/Cplusplus-intermediate-guide/blob/main/iterators.cpp)
 
+---
+
+## Map-like containers: `operator[]` vs safe lookups
+
+`std::map` and `std::unordered_map` have a convenient `operator[]`, but it has an important side effect: **it inserts a default-constructed value if the key is missing**.
+
+```cpp
+std::map<std::string, int> counts;
+
+int a = counts["missing"];  // inserts {"missing", 0}, returns reference to 0
+counts["foo"] += 1;         // inserts {"foo", 0} if not present, then increments
+```
+
+This is great for counters, but **dangerous** if you only want to *check* for existence, because it silently mutates the container and can grow it unexpectedly.
+
+For *read-only / existence* checks, prefer:
+
+- **C++20+**: `.contains(key)` — does **not** insert:
+
+```cpp
+std::unordered_map<std::string, int> freq;
+
+if (freq.contains("bar")) {          // safe, no insertion
+    std::cout << freq["bar"];      // OK here if you actually need it
+}
+```
+
+- **Pre-C++20** (or for portability): use `.find(key)` and compare to `.end()`:
+
+```cpp
+std::unordered_map<std::string, int> freq;
+
+if (auto it = freq.find("bar"); it != freq.end()) {
+    std::cout << it->second;         // safe access, no insertion
+}
+```
+
+Summary:
+- Use `m[key]` when you **intend** to create/update entries.
+- Use `m.contains(key)` (C++20) or `m.find(key)` when you only need to **query** without side effects.
+
+---
+
 ## Networking (Transport Layer)
 
 Modern C++ applications typically interact at **Layer 4 (Transport)** through the **socket API**, which sits above the IP layer.

@@ -1,20 +1,36 @@
+/*
+ * Basic Limit Order Matching Engine
+ *
+ * Features:
+ * - Price-time priority matching: Orders matched first by best price, then by arrival time (FIFO)
+ * - Buy orders sorted descending (highest price first), sell orders ascending (lowest price first)
+ * - Automatic matching on order insertion when bid price >= ask price
+ * - Partial fills supported: Orders can be partially filled across multiple matches
+ * - Order deduplication: Duplicate order IDs are rejected
+ * - Trade execution: Returns all trades generated from a single order insertion
+ * - Efficient lookups: O(1) order cancellation capability via hash map
+ *
+ * Matching Logic:
+ * - Continuous matching: After adding an order, matches repeatedly until no cross exists
+ * - Match price: Uses the price of the resting order (market maker gets their price)
+ * - Order removal: Fully filled orders automatically removed from book
+ *
+ * Print functions and the tests (main function) are AI-generated.
+ */
+
+#include <iostream>
+#include <map>
+#include <list>
+#include <unordered_map>
+#include <memory>
 #include <cstdint>
 #include <vector>
-#include <format>
-#include <list>
-#include <memory>
-#include <unordered_map>
-#include <map>
-#include <functional>
-#include <numeric>
-#include <iostream>
+#include <iomanip>
+#include <cassert>
 
-// class places the inside keywords inside the enum's namespace (OrderType::GoodTillCancel)
-enum class OrderType
-{
-    GoodTillCancel, // 0
-    FillAndKill     // 1
-};
+using Price = std::int32_t;
+using Quantity = std::uint32_t;
+using OrderId = std::uint64_t;
 
 enum class Side
 {
@@ -22,346 +38,425 @@ enum class Side
     Sell
 };
 
-using Price = std::int32_t;
-using Quantity = std::uint32_t;
-using OrderID = std::uint64_t;
-
-struct LevelInfo
-{
-    Price price_;
-    Quantity quantity_;
-};
-
-using LevelInfos = std::vector<LevelInfo>;
-
-class OrderbookLevelInfos
-{
-public:
-    OrderbookLevelInfos(const LevelInfos &bids, const LevelInfos &asks)
-        : bids_{bids}, asks_{asks} {}
-
-    const LevelInfos &getBids() const noexcept { return bids_; }
-    const LevelInfos &getAsks() const noexcept { return asks_; }
-
-private:
-    LevelInfos bids_, asks_;
-};
-
 class Order
 {
-public:
-    Order(OrderType orderType, OrderID orderID, Side side, Price price, Quantity quantity)
-        : orderType_{orderType}, orderID_{orderID}, side_{side}, price_{price}, initialQuantity_{quantity}, remainingQuantity_{quantity} {};
-
-    OrderType getOrderType() const { return orderType_; }
-    OrderID getOrderID() const { return orderID_; }
-    Side getSide() const { return side_; }
-    Price getPrice() const { return price_; }
-    Quantity getInitialQuantity() const { return initialQuantity_; }
-    Quantity getRemainingQuantity() const { return remainingQuantity_; }
-    Quantity getFilledQuantity() const { return initialQuantity_ - remainingQuantity_; }
-    bool isFilled() const { return remainingQuantity_ == 0; }
-    bool isBuy() const { return side_ == Side::Buy; }
-    bool isSell() const { return side_ == Side::Sell; }
-
-    void Fill(Quantity quantity)
-    {
-        if (quantity > getRemainingQuantity())
-        {
-            throw std::logic_error(std::format("Order ({}) could not be filled for more than its remaining quantity.", getOrderID()));
-        }
-
-        remainingQuantity_ -= quantity;
-    }
-
 private:
-    OrderType orderType_;
-    OrderID orderID_;
+    OrderId id_;
     Side side_;
     Price price_;
-    Quantity initialQuantity_, remainingQuantity_;
+    Quantity quantity_;
+
+public:
+    Order(OrderId id, Side side, Price price, Quantity quantity) : id_(id), side_(side), price_(price),
+                                                                   quantity_(quantity)
+    {
+    }
+
+    OrderId getId() { return id_; }
+    Side getSide() { return side_; }
+    Price getPrice() { return price_; }
+    Quantity getQuantity() { return quantity_; }
+
+    void Fill(const Quantity filling)
+    {
+        if (filling > quantity_)
+        {
+            throw std::logic_error("filling too much");
+        }
+        quantity_ -= filling;
+    }
+
+    bool isFilled() const
+    {
+        return quantity_ == 0;
+    }
+
+    void print() const
+    {
+        using namespace std;
+        cout << "Id: " << id_ << " Side: " << static_cast<int>(side_) << " Price: " << price_ << " Quantity: " << quantity_ << '\n';
+    }
 };
 
 using OrderPointer = std::shared_ptr<Order>;
-// TODO why not a forward_list or a vector
+
 using OrderPointers = std::list<OrderPointer>;
 
-class OrderModify
+struct TradeSide
 {
-public:
-    OrderModify(OrderID orderID, Side side, Price price, Quantity quantity)
-        : orderID_{orderID}, side_{side}, price_{price}, newQuantity_{quantity} {};
+    OrderId orderId;
+    Price price;
+    Quantity quantity;
+};
 
-    OrderID getOrderID() const { return orderID_; }
-    Price getPrice() const { return price_; }
-    Side getSide() const { return side_; }
-    Quantity getQuantity() const { return newQuantity_; }
+struct Trade
+{
+    TradeSide buySide;
+    TradeSide sellSide;
 
-    OrderPointer ToOrderPointer(OrderType type) const
+    void print() const
     {
-        return std::make_shared<Order>(type, getOrderID(), getSide(), getPrice(), getQuantity());
+        using namespace std;
+        cout << "Buy: " << buySide.orderId << ' ' << buySide.price << ' ' << buySide.quantity << '\n';
+        cout << "Sell: " << sellSide.orderId << ' ' << sellSide.price << ' ' << sellSide.quantity << '\n';
     }
-
-private:
-    OrderID orderID_;
-    Side side_;
-    Price price_;
-    Quantity newQuantity_;
-};
-
-// trade info, a trade object needs two...
-struct TradeInfo
-{
-    OrderID orderID_;
-    Price price_;
-    Quantity quantity_;
-};
-
-// ...the ask side and the bid side
-class Trade
-{
-public:
-    Trade(const TradeInfo &bidTrade, const TradeInfo &askTrade)
-        : bidTrade_{bidTrade}, askTrade_{askTrade} {};
-
-    const TradeInfo &getBidTrade() const { return bidTrade_; }
-    const TradeInfo &getAskTrade() const { return askTrade_; }
-
-private:
-    TradeInfo bidTrade_, askTrade_;
 };
 
 using Trades = std::vector<Trade>;
 
-class OrderBook
+class Orderbook
 {
-private:
     struct OrderEntry
     {
-        // a pointer to the actual order
-        OrderPointer order_{nullptr};
-        // iterator to the list of order pointers
-        OrderPointers::iterator location_;
+        OrderPointer order_;
+        OrderPointers::iterator iter_;
     };
 
-    std::map<Price, OrderPointers, std::greater<Price>> bids_;
-    std::map<Price, OrderPointers, std::less<Price>> asks_;
-    std::unordered_map<OrderID, OrderEntry> orders_;
+    std::map<Price, OrderPointers, std::greater<>> bids_;
+    std::map<Price, OrderPointers, std::less<>> asks_;
+    std::unordered_map<OrderId, OrderEntry> orders_hashmap;
 
-    bool CanMatch(Side side, Price price) const
-    {
-        if (side == Side::Buy)
-        {
-            if (asks_.empty())
-                return false;
-
-            const auto &[bestAsk, _] = *asks_.begin(); // structured binding: bestAsk is the price, _ means I don't care (about the OrderPointers list)
-
-            return price >= bestAsk;
-        }
-
-        else // if selling
-        {
-            if (bids_.empty())
-                return false;
-
-            const auto &[bestBid, _] = *bids_.begin(); // structured binding: bestAsk is the price, _ means I don't care (about the OrderPointers list)
-
-            return price <= bestBid;
-        }
-    }
-
-    // returns a vector of trade(s)
     Trades MatchOrders()
     {
-        Trades trades;                  // empty vector of trades
-        trades.reserve(orders_.size()); // as many trades as the orders number...
+        Trades trades = {};
 
-        while (true) // FOR EACH (matching) price...
+        while (!asks_.empty() && !bids_.empty())
         {
-            if (bids_.empty() || asks_.empty())
-                break; // if no bids or no asks in the book then no trades
-
-            auto &[bidPrice, bids] = *bids_.begin(); // best bid(s)
-            auto &[askPrice, asks] = *asks_.begin(); // best ask(s)
-
-            if (bidPrice < askPrice)
-                break; // if the best bid is strictly under the best ask then no trades.
-
-            while (bids.size() && asks.size())
-            {                            // while there are still bids and asks left
-                auto bid = bids.front(); // first of the LIST (first order added in time: FIFO)
-                auto ask = asks.front();
-                // auto &bid could lead to a serious bug when popping it! copying a shared ptr is very cheap so let's do it.
-
-                // there is a trade! the quantity is the minimum between the two quantities
-                Quantity quantity = std::min(bid->getRemainingQuantity(), ask->getRemainingQuantity());
-
-                bid->Fill(quantity); // subtracts
-                ask->Fill(quantity);
-
-                // if this check was to be done in the order filling itself, it wouldn't be removed from the book
-                if (bid->isFilled())
-                {
-                    bids.pop_front(); // remove that bid order from the queue at that price if it is empty
-                    orders_.erase(bid->getOrderID());
-                    if (bids.empty()) // if there are no more bids at the considered price...
-                    {
-                        bids_.erase(bidPrice); // remove the current price from the book
-                    }
-                }
-
-                if (ask->isFilled())
-                {
-                    asks.pop_front(); // remove that ask order from the queue at that price if it is empty
-                    orders_.erase(ask->getOrderID());
-                    if (asks.empty()) // if there are no more asks at the considered price...
-                    {
-                        asks_.erase(askPrice); // remove the current price from the book
-                    }
-                }
-
-                // TODO price and quantity is obviously the same
-                trades.push_back(Trade{
-                    TradeInfo{bid->getOrderID(), bid->getPrice(), quantity},
-                    TradeInfo{ask->getOrderID(), ask->getPrice(), quantity}});
+            auto &[bestBidPrice, bestBids] = *bids_.begin();
+            auto &[bestAskPrice, bestAsks] = *asks_.begin();
+            if (bestBidPrice < bestAskPrice)
+            {
+                return trades;
             }
-        }
 
-        if (!bids_.empty())
-        {
-            auto &[_, bids] = *bids_.begin(); // take the highest bids
-            auto &order = bids.front();       // take the oldest order
-            if (order->getOrderType() == OrderType::FillAndKill)
-            { // if fill and kill delete it
-                CancelOrder(order->getOrderID());
+            while (!bestBids.empty() && !bestAsks.empty())
+            {
+                const auto &oldestBid = bestBids.front();
+                const auto &oldestAsk = bestAsks.front();
+                const Quantity &bidQty = oldestBid->getQuantity();
+                const Quantity &askQty = oldestAsk->getQuantity();
+                const Quantity match_qty = std::min(bidQty, askQty);
+                const OrderId buyId = oldestBid->getId();
+                const OrderId sellId = oldestAsk->getId();
+                oldestBid->Fill(match_qty);
+                oldestAsk->Fill(match_qty);
+
+                TradeSide buySide{buyId, oldestBid->getPrice(), match_qty};
+                TradeSide sellSide{sellId, oldestAsk->getPrice(), match_qty};
+                trades.push_back({buySide, sellSide});
+
+                if (oldestBid->isFilled())
+                {
+                    bestBids.pop_front();
+                    orders_hashmap.erase(buyId);
+                }
+                if (oldestAsk->isFilled())
+                {
+                    bestAsks.pop_front();
+                    orders_hashmap.erase(sellId);
+                }
+            }
+            if (bestAsks.empty())
+            {
+                asks_.erase(asks_.begin()); // bestAsks invalid now
+            }
+            if (bestBids.empty())
+            {
+                bids_.erase(bids_.begin()); // bestBids invalid now
             }
         }
 
         return trades;
     }
 
-    // orderbook class public API
 public:
-    Trades AddOrder(OrderPointer order)
+    Trades AddOrder(OrderPointer new_order)
     {
-        if (orders_.contains(order->getOrderID()))
+        if (orders_hashmap.contains(new_order->getId()))
         {
-            return {}; // if order id already exists reject order
+            return {};
         }
 
-        if (order->getOrderType() == OrderType::FillAndKill && !CanMatch(order->getSide(), order->getPrice()))
+        OrderPointers::iterator it;
+        if (new_order->getSide() == Side::Buy)
         {
-            return {}; // do not add order if fill and kill and no match
+            auto &bids_at_price = bids_[new_order->getPrice()];
+            it = bids_at_price.insert(bids_at_price.end(), new_order);
         }
-
-        OrderPointers::iterator iterator; // iterator to list of order shared pointers
-
-        if (order->getSide() == Side::Buy)
-        {
-            auto &orders = bids_[order->getPrice()];                 // take the bids tree node with the correct price or create it
-            orders.push_back(order);                                 // add it to the list of orders in that price node
-            iterator = std::next(orders.begin(), orders.size() - 1); // set the iterator to the last (newly added) element
-        }
-
         else
         {
-            auto &orders = asks_[order->getPrice()];
-            orders.push_back(order);
-            iterator = std::next(orders.begin(), orders.size() - 1);
+            auto &asks_at_price = asks_[new_order->getPrice()];
+            it = asks_at_price.insert(asks_at_price.end(), new_order);
         }
+        orders_hashmap[new_order->getId()] = {new_order, it};
 
-        orders_.insert({order->getOrderID(), OrderEntry{order, iterator}}); // add it to the hashmap (which searches order by id and gives back an entry, which is a pointer + iterator to the list of orders)
         return MatchOrders();
     }
 
-    void CancelOrder(OrderID orderID)
+    int Size() const
     {
-        // if it doesn't exist
-        if (!orders_.contains(orderID))
-            return;
-
-        const auto [order, orderIterator] = orders_.at(orderID); // O(1) access, great!
-        orders_.erase(orderID);                                   // remove it from the hashmap
-
-        // now look for it in the right tree to remove it from the list at the x price.
-        // we saved the iterator to the list in the hasmap! and also a copy of all the order information, following its pointer.
-        // note: if the pointer was missing, to have the info would take a traversal of the tree till we find the price, the
-        // price itself (which we don't have) and then nothing else because we would have the iterator. instead, having the information
-        // ready is useful even tho we'll reach the same info anyway looking for that iterator in the tree.
-        if (order->getSide() == Side::Sell)
-        {
-            auto price = order->getPrice();
-            auto &orders = asks_.at(price); // get the tree node for the order price we want to cancel
-            orders.erase(orderIterator);    // delete it
-            if (orders.empty())             // if there are no more orders at that price...
-                asks_.erase(price);         // ... remove the price from the tree
-        }
-        else
-        {
-            auto price = order->getPrice();
-            auto &orders = bids_.at(price); // get the tree node for the order price we want to cancel
-            orders.erase(orderIterator);    // delete it
-            if (orders.empty())             // if there are no more orders at that price...
-                bids_.erase(price);         // ... remove the price from the tree
-        }
+        return orders_hashmap.size();
     }
 
-    // Modify is just cancel + add (can generate trades)
-    Trades MatchOrder(OrderModify order)
-    {
-        // return empty vector of trade(s) if there is no order with the same id
-        if (!orders_.contains(order.getOrderID()))
-            return {};
-
-        // get the pointer to the order (and no iterator, not interested) from the hashmap
-        const auto &[existingOrder, _] = orders_.at(order.getOrderID());
-
-        // maybe could also do existingOrder->getOrderID() since they have the same ID
-        CancelOrder(order.getOrderID());
-        return AddOrder(order.ToOrderPointer(existingOrder->getOrderType()));
-    }
-
-    std::size_t Size() const { return orders_.size(); }
-
-    OrderbookLevelInfos GetOrderInfos() const
-    {
-        LevelInfos bidInfos, askInfos;
-        bidInfos.reserve(orders_.size()); // worst case. could not ask the tree because it contains lists :(
-        askInfos.reserve(orders_.size());
-
-        auto CreateLevelInfos = [](Price price, const OrderPointers &orders)
-        {
-            return LevelInfo{price, std::accumulate(orders.begin(), orders.end(), (Quantity)0,
-                                                    [](Quantity runningSum, const OrderPointer &order)
-                                                    { return runningSum + order->getRemainingQuantity(); })};
-        };
-        // the inner lambda extracts the running sum of quantities for orders at a given price.
-        // the outer one just accumulates, returning the running sum of quantities.
-        // then the function returns a LevelInfo structure with price and total quantity
-
-        for (const auto &[price, orders] : bids_)
-        {
-            bidInfos.push_back(CreateLevelInfos(price, orders));
-        }
-        for (const auto &[price, orders] : asks_)
-        {
-            askInfos.push_back(CreateLevelInfos(price, orders));
-        }
-
-        return OrderbookLevelInfos{bidInfos, askInfos};
-    }
+    // Friend function for printing
+    friend void print(const Orderbook &ob);
 };
 
-// very basic testing.
+// Overload 1: Print the current orderbook state
+void print(const Orderbook &ob)
+{
+    using namespace std;
+
+    cout << "\n"
+         << string(60, '=') << "\n";
+    cout << "ORDERBOOK STATUS (Total Orders: " << ob.Size() << ")\n";
+    cout << string(60, '=') << "\n\n";
+
+    // Print Asks (Sell orders) - reverse iterate to show highest first
+    cout << "ASKS (Sell Orders):\n";
+    cout << string(60, '-') << "\n";
+    if (ob.asks_.empty())
+    {
+        cout << "  (empty)\n";
+    }
+    else
+    {
+        cout << setw(10) << "Price" << " | " << setw(10) << "Quantity" << " | " << "Order IDs\n";
+        cout << string(60, '-') << "\n";
+
+        for (auto it = ob.asks_.rbegin(); it != ob.asks_.rend(); ++it)
+        {
+            const auto &[price, orders] = *it;
+            Quantity totalQty = 0;
+            vector<OrderId> ids;
+
+            for (const auto &order : orders)
+            {
+                totalQty += order->getQuantity();
+                ids.push_back(order->getId());
+            }
+
+            cout << setw(10) << price << " | " << setw(10) << totalQty << " | ";
+            for (size_t i = 0; i < ids.size(); ++i)
+            {
+                if (i > 0)
+                    cout << ", ";
+                cout << ids[i];
+            }
+            cout << "\n";
+        }
+    }
+
+    cout << "\n"
+         << string(60, '-') << "\n";
+    cout << "                      SPREAD\n";
+    cout << string(60, '-') << "\n\n";
+
+    // Print Bids (Buy orders)
+    cout << "BIDS (Buy Orders):\n";
+    cout << string(60, '-') << "\n";
+    if (ob.bids_.empty())
+    {
+        cout << "  (empty)\n";
+    }
+    else
+    {
+        cout << setw(10) << "Price" << " | " << setw(10) << "Quantity" << " | " << "Order IDs\n";
+        cout << string(60, '-') << "\n";
+
+        for (const auto &[price, orders] : ob.bids_)
+        {
+            Quantity totalQty = 0;
+            vector<OrderId> ids;
+
+            for (const auto &order : orders)
+            {
+                totalQty += order->getQuantity();
+                ids.push_back(order->getId());
+            }
+
+            cout << setw(10) << price << " | " << setw(10) << totalQty << " | ";
+            for (size_t i = 0; i < ids.size(); ++i)
+            {
+                if (i > 0)
+                    cout << ", ";
+                cout << ids[i];
+            }
+            cout << "\n";
+        }
+    }
+
+    cout << string(60, '=') << "\n\n";
+}
+
+// Overload 2: Print trades
+void print(const Trades &trades)
+{
+    using namespace std;
+
+    if (trades.empty())
+    {
+        cout << "\n[No trades executed]\n\n";
+        return;
+    }
+
+    cout << "\n"
+         << string(60, '=') << "\n";
+    cout << "TRADES EXECUTED (" << trades.size() << " trade" << (trades.size() > 1 ? "s" : "") << ")\n";
+    cout << string(60, '=') << "\n\n";
+
+    for (size_t i = 0; i < trades.size(); ++i)
+    {
+        const auto &trade = trades[i];
+        cout << "Trade #" << (i + 1) << ":\n";
+        cout << "  Buy Side:  OrderID " << setw(6) << trade.buySide.orderId
+             << " | Price: " << setw(6) << trade.buySide.price
+             << " | Qty: " << setw(6) << trade.buySide.quantity << "\n";
+        cout << "  Sell Side: OrderID " << setw(6) << trade.sellSide.orderId
+             << " | Price: " << setw(6) << trade.sellSide.price
+             << " | Qty: " << setw(6) << trade.sellSide.quantity << "\n";
+        cout << string(60, '-') << "\n";
+    }
+    cout << "\n";
+}
+
 int main()
 {
-    OrderBook orderbook;
-    const OrderID orderID = 1;
-    orderbook.AddOrder(std::make_shared<Order>(OrderType::GoodTillCancel, orderID, Side::Buy, 100, 10));
-    std::cout << orderbook.Size() << std::endl;
-    orderbook.CancelOrder(orderID);
-    std::cout << orderbook.Size() << std::endl;
+    using namespace std;
+
+    cout << "\n*** LIMIT ORDER MATCHING ENGINE TEST ***\n";
+
+    Orderbook ob;
+    Trades test_trades;
+
+    // Test 1: Empty orderbook
+    cout << "\n=== TEST 1: Initial State (Empty Orderbook) ===";
+    print(ob);
+    assert(ob.Size() == 0 && "Empty orderbook should have size 0");
+
+    // Test 2: Add buy order with no match
+    cout << "\n=== TEST 2: Add Buy Order (ID=1, Price=100, Qty=10) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(1, Side::Buy, 100, 10));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 0 && "No matching orders, should produce 0 trades");
+    assert(ob.Size() == 1 && "One order in book");
+
+    // Test 3: Add sell order above best bid (no match)
+    cout << "\n=== TEST 3: Add Sell Order (ID=2, Price=105, Qty=5) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(2, Side::Sell, 105, 5));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 0 && "Sell price > buy price, no match");
+    assert(ob.Size() == 2 && "Two orders in book");
+
+    // Test 4: Add another buy order at different price
+    cout << "\n=== TEST 4: Add Buy Order (ID=3, Price=98, Qty=8) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(3, Side::Buy, 98, 8));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 0 && "No match at this price");
+    assert(ob.Size() == 3 && "Three orders in book");
+
+    // Test 5: Exact match
+    cout << "\n=== TEST 5: Add Sell Order Matching Best Bid (ID=4, Price=100, Qty=10) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(4, Side::Sell, 100, 10));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 1 && "Should produce exactly 1 trade");
+    assert(test_trades[0].buySide.orderId == 1 && "Buy side should be order 1");
+    assert(test_trades[0].sellSide.orderId == 4 && "Sell side should be order 4");
+    assert(test_trades[0].buySide.quantity == 10 && "Trade quantity should be 10");
+    assert(ob.Size() == 2 && "Both matched orders removed, 2 remain");
+
+    // Test 6: Partial fill - sell order larger than buy
+    cout << "\n=== TEST 6: Partial Fill - Sell > Buy (ID=5, Price=98, Qty=15) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(5, Side::Sell, 98, 15));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 1 && "One trade from partial fill");
+    assert(test_trades[0].buySide.quantity == 8 && "Buy order fully filled with 8");
+    assert(test_trades[0].sellSide.quantity == 8 && "Sell order partially filled with 8");
+    assert(ob.Size() == 2 && "Buy order removed, partial sell remains");
+
+    // Test 7: Multiple price levels - rebuild book
+    cout << "\n=== TEST 7: Build Multi-Level Book ===";
+    Trades accumulated_trades;
+    auto t1 = ob.AddOrder(make_shared<Order>(6, Side::Buy, 102, 20));
+    accumulated_trades.insert(accumulated_trades.end(), t1.begin(), t1.end());
+    auto t2 = ob.AddOrder(make_shared<Order>(7, Side::Buy, 101, 15));
+    accumulated_trades.insert(accumulated_trades.end(), t2.begin(), t2.end());
+    auto t3 = ob.AddOrder(make_shared<Order>(8, Side::Buy, 100, 10));
+    accumulated_trades.insert(accumulated_trades.end(), t3.begin(), t3.end());
+    auto t4 = ob.AddOrder(make_shared<Order>(9, Side::Sell, 108, 12));
+    accumulated_trades.insert(accumulated_trades.end(), t4.begin(), t4.end());
+    auto t5 = ob.AddOrder(make_shared<Order>(10, Side::Sell, 109, 18));
+    accumulated_trades.insert(accumulated_trades.end(), t5.begin(), t5.end());
+    print(accumulated_trades);
+    print(ob);
+    assert(accumulated_trades.size() == 1 && "Order 6 matches remaining sell order 5");
+    assert(ob.Size() == 6 && "6 orders total in book (order 5 and 6 partially matched)");
+
+    // Test 8: Aggressive sell order matching multiple levels
+    cout << "\n=== TEST 8: Aggressive Sell Crossing Multiple Levels (ID=11, Price=100, Qty=40) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(11, Side::Sell, 100, 40));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 3 && "Should match 3 buy orders at different levels");
+    assert(test_trades[0].buySide.orderId == 6 && "First match with order 6 (price 102)");
+    assert(test_trades[1].buySide.orderId == 7 && "Second match with order 7 (price 101)");
+    assert(test_trades[2].buySide.orderId == 8 && "Third match with order 8 (price 100)");
+    assert(ob.Size() == 4 && "3 buy orders removed, 1 partial sell (ID 11) remains");
+
+    // Test 9: Multiple orders at same price (FIFO test)
+    // NOTE: Changed Price to 90. Best Ask is currently 100 (Order 11).
+    // To rest in the book, the Buy Price must be < Best Ask.
+    cout << "\n=== TEST 9: FIFO Test - Multiple Orders at Same Price (90) ===";
+    accumulated_trades.clear();
+    auto t9a = ob.AddOrder(make_shared<Order>(12, Side::Buy, 90, 5));
+    accumulated_trades.insert(accumulated_trades.end(), t9a.begin(), t9a.end());
+    auto t9b = ob.AddOrder(make_shared<Order>(13, Side::Buy, 90, 3));
+    accumulated_trades.insert(accumulated_trades.end(), t9b.begin(), t9b.end());
+    auto t9c = ob.AddOrder(make_shared<Order>(14, Side::Buy, 90, 7));
+    accumulated_trades.insert(accumulated_trades.end(), t9c.begin(), t9c.end());
+    print(accumulated_trades);
+    print(ob);
+    assert(accumulated_trades.empty() && "Orders should rest, not match");
+    assert(ob.Size() == 7 && "7 orders in book (4 previous Asks + 3 new Bids)");
+
+    // Test 9b: FIFO Execution
+    // NOTE: Sell Price set to 90 to cross Bids. Qty set to 8 to match exactly ID 12(5) and 13(3).
+    cout << "\n=== TEST 9b: Sell Order Matching FIFO Queue (ID=15, Price=90, Qty=8) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(15, Side::Sell, 90, 8));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 2 && "Should match exactly 2 orders (5+3=8)");
+    assert(test_trades[0].buySide.orderId == 12 && "First in queue: order 12");
+    assert(test_trades[1].buySide.orderId == 13 && "Second in queue: order 13");
+    assert(ob.Size() == 5 && "2 Buy orders removed. Remaining: 4 Asks + 1 Bid (Order 14)");
+
+    // Test 10: Duplicate order ID
+    // NOTE: Using ID 11 (which exists in book) to verify rejection.
+    // (ID 12 was removed in Test 9b, so re-adding it would actually be valid).
+    cout << "\n=== TEST 10: Duplicate Order ID (ID=11 again) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(11, Side::Sell, 200, 5));
+    print(test_trades);
+    print(ob);
+    cout << "(Should show no trades - duplicate rejected)\n";
+    assert(test_trades.size() == 0 && "Duplicate order should be rejected");
+    assert(ob.Size() == 5 && "Size unchanged after duplicate rejection");
+
+    // Test 11: Final aggressive order clearing remaining book
+    // NOTE: Price 80 is aggressive enough to cross remaining Bid at 90.
+    cout << "\n=== TEST 11: Clear Remaining Bids (ID=16, Price=80, Qty=100) ===";
+    test_trades = ob.AddOrder(make_shared<Order>(16, Side::Sell, 80, 100));
+    print(test_trades);
+    print(ob);
+    assert(test_trades.size() == 1 && "Should match remaining buy order (ID 14)");
+    assert(test_trades[0].buySide.orderId == 14);
+    assert(ob.Size() == 5 && "Bid 14 removed, new Sell 16 added (rests with qty 93). Total 5 Asks.");
+
+    cout << "\n*** ALL TESTS COMPLETED SUCCESSFULLY ***\n\n";
 
     return 0;
 }
