@@ -767,7 +767,7 @@ if (auto it = freq.find("bar"); it != freq.end()) {
 ```
 
 Summary:
-- Use `m[key]` when you **intend** to create/update entries.
+- Use `m[key]` when you **intend** to create/update entries (if creating an entry, it will call the default constructor on it!).
 - Use `m.contains(key)` (C++20) or `m.find(key)` when you only need to **query** without side effects.
 
 ---
@@ -1087,6 +1087,52 @@ int main()
     auto bool_ref_clean = vec[0]; // how it's done in reality
 }
 ```
+
+---
+
+## `std::deque`: Under the Hood
+
+`std::deque` (double-ended queue) is often misunderstood. It is **not** a linked list, nor is it a contiguous array.
+
+### Implementation
+
+Most STL implementations (like GCC/Clang's libstdc++ and libc++) implement `std::deque` as a **dynamic array of pointers to fixed-size arrays**.
+
+Think of it as a "map" (a central vector) pointing to several "blocks" (chunks) of data.
+
+```cpp
+// Conceptual layout
+struct Deque {
+    T** map;          // Pointer to array of pointers
+    size_t map_size;  // Size of the map
+    size_t start;     // Index of first element
+    size_t finish;    // Index of last element
+    // ...
+};
+```
+
+*   **Memory Layout:** It is **piecewise contiguous**. Elements within a block are contiguous, but blocks are scattered in memory.
+*   **Growth:** When you push to the front or back and the current block is full, it allocates a *new* block and links it in the map. It does **not** reallocate and copy all existing elements like `std::vector` does.
+
+### Performance Characteristics
+
+| Feature | `std::vector` | `std::deque` | `std::list` |
+| :--- | :--- | :--- | :--- |
+| **Random Access** | O(1) (1 pointer deref) | O(1) (2 pointer derefs) | O(N) |
+| **Cache Locality** | Excellent | Good | Poor |
+| **Insert/Remove at ends** | Back: O(1), Front: O(N) | Back: O(1), Front: O(1) | Both: O(1) |
+| **Insert/Remove middle** | O(N) | O(N) (shifts to closer end) | O(1) (if iterator known) |
+| **Iterator Invalidation** | On reallocation | Always (refs stable at ends) | Never (except erased) |
+| **Pointer Validity** | Invalidated on resize | **Remains valid** on push/pop ends | Remains valid |
+
+### When to use `std::deque`?
+
+1.  **You need to push/pop at the front.** `std::vector` is terrible at this (shifts all elements).
+2.  **You don't need contiguous memory.** If you need to pass `&vec[0]` to a C API expecting a raw array, you *must* use `vector`. `deque` cannot do this.
+3.  **You want to avoid reallocation costs.** `deque` grows more gracefully than `vector` because it doesn't copy existing elements to new memory.
+4.  **Large datasets.** For very large sequences, `deque` might avoid the issue of finding a single huge contiguous memory block (fragmentation).
+
+**Tip:** If you are unsure, default to `std::vector`. Only switch to `std::deque` if you specifically need efficient front insertion or pointer stability.
 
 ---
 
